@@ -17,7 +17,7 @@ library("shiny")
 library("ggplot2")
 library("readxl")
 library("here")
-
+library("dplyr")
 
 ui <- fluidPage(
   theme = bslib::bs_theme(bootswatch = "simplex"),
@@ -47,7 +47,14 @@ server <- function(input, output){
 
   ## import data
   para <- read_excel("data/stock_parameters.xlsx")
-  lenfreq <- read.csv(file = "data/bansis_len_freq_data.csv")
+  lenfreq <- read.csv(file = "data/bansis_len_freq_data.csv") |>
+    filter(sciname == "Nemipterus japonicus") |>
+    mutate(len=floor(length_cm)) |>
+    group_by(len) |>
+    summarise(fq=sum(frequency)) |>
+    ungroup()
+
+
 
   ## 1. set up reactive dataframe ##
   values <- reactiveValues()
@@ -55,14 +62,14 @@ server <- function(input, output){
                           y = numeric(),
                           selfun = factor()
                           )
-  df <- data.frame(len = lenfreq$length_cm, fq = lenfreq$frequency)
-  df[is.na(df)] <- 0
+  dfR <- reactiveValues()
+  dfR$df <- data.frame(len = lenfreq$length_cm, fq = lenfreq$frequency)
+
     ## 2. Create a plot ##
   output$plot1 = renderPlot({
-    ggplot(values$DT, aes(x = x, y = y)) +
-      #geom_point(aes(color = color,
-                     #shape = shape), size = 5) +
-    geom_col(data=df, aes(x=len, y=fq), fill="#09306e", alpha=1) +
+    ggplot() +
+      geom_point(values$DT, aes(x = x, y = y)) +
+      geom_col(data=dfR$df, aes(x=len, y=fq), fill="#09306e", alpha=1) +
       lims(x = c(0, 75)) +
       theme(legend.position = "bottom") +
       labs(x="Length", y="Frequency")

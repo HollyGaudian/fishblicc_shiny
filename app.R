@@ -40,19 +40,19 @@ ui <- fluidPage(
       chooseSliderSkin(
         skin = "Flat",
         color = "#941414"),
-      selectInput("Selectivity_functions", label = "selectivity",
-                  h4("Select:"), choices = list("None", "Logistic", "Normal", "Single Normal", "Double Normal"),
+      selectInput("selectivity_functions", label = "Selectivity",
+                  h4("Select:"), choices = list("None", "Logistic", "Double Normal"),
                   multiple = FALSE),
       actionButton("plot_btn", "Plot Graph"),
       sliderInput("slope_slider",
                   "Prior Slope:",
-                  min = min(data$fq),
-                  max = max(data$fq),
+                  min = 0, #min(data$fq),
+                  max = 250, #max(data$fq),
                   value = initial_slope),
       sliderInput("peak_slider",
                   "Prior Mean",
-                  min = min(data$len),
-                  max = max(data$len),
+                  min = 0, #min(data$len),
+                  max = 30, #max(data$len),
                   value = 12),
       actionButton("save", label = "Save Parameters"),
       actionButton("remove_row", "Remove Last row")
@@ -84,7 +84,7 @@ server <- function(input, output, session) {
       summarise(fq=sum(frequency)) |>
       ungroup()
 
-data <- data.frame(lenfreq)
+data <- data.frame(len = names(data), fq = data)
 
 #paraData <- read_xlsx(path =here("data/stock_parameters.xlsx"),
                           #sheet = "parms") |>
@@ -98,6 +98,25 @@ data <- data.frame(lenfreq)
 
 parameter_data <- reactiveVal(data.frame(peak = numeric(), slope = numeric()))
 
+    ## selectivity selection
+add_curve <- function(selectivity, data) {
+  if (selectivity == "None") {
+    return(NULL)
+  } else if (selectivity == "Logistic") {
+    # Add logistic curve to plot
+    return(geom_smooth(aes(y = stat(count)), method = "glm", stat = "smooth", position = "identity",
+                       method.args = list(family = "binomial"), se = FALSE, color = "red"))
+  } else if (selectivity == "Double Normal") {
+    # Add double normal curve to plot (example parameters)
+    mu1 <- mean(data$len) - 5
+    mu2 <- mean(data$len) + 5
+    sigma <- sd(data$len)
+    return(
+      geom_function(fun = function(x) dnorm(x, mean = mu1, sd = sigma), aes(y = stat(count)), color = "red") +
+        geom_function(fun = function(x) dnorm(x, mean = mu2, sd = sigma), aes(y = stat(count)), color = "red")
+    )
+  }
+}
 
     ## 2. Create a plot ##
   output$plot1 <- renderPlot({
@@ -110,8 +129,9 @@ parameter_data <- reactiveVal(data.frame(peak = numeric(), slope = numeric()))
 
     ggplot(data, aes(x = len, y = fq)) +
       geom_bar(stat = "identity", fill = "#0f2667", alpha = 0.7) +
-      geom_smooth(method = "glm", family = gaussian(link = "identity"), se = FALSE,
-                  formula = y ~ dnorm(x, mean = mu, sd = sigma), color = "#941414", linetype = "solid", size = 1) +
+      add_curve(input$selectivity_functions, data) +
+      #geom_smooth(method = "glm", family = gaussian(link = "identity"), se = FALSE,
+                  #formula = y ~ dnorm(x, mean = mu, sd = sigma), color = "#941414", linetype = "solid", size = 1) +
       labs(x = "Length", y = "Frequency") +
       theme_minimal() +
       theme(

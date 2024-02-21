@@ -1,15 +1,8 @@
+
 #
-# This is a Shiny web application. You can run the application by clicking
-# the 'Run App' button above.
-#
-# Find out more about building applications with Shiny here:
-#
-#    http://shiny.rstudio.com/
-#
-#1) plot length data as bar/histogram
-#2) collect 2 parameters from clicking plot
-#3) plot a normal selectivity curve over the data using the 2 parameter.
-#Rinse and repeat.
+#1) plot length data as bar/histogram done
+#2) collect 2 parameters from clicking plot done
+#3) plot a normal selectivity curve over the data using the 2 parameter. done
 
 library("shiny")
 library("ggplot2")
@@ -25,50 +18,130 @@ library("shinythemes")
 library("shinyWidgets")
 library("jsonlite")
 
+# The following are functions to help manipulate the fishblicc data object
 
+#' Get selectivity function definitions for a single gear in a list
+#'
+get_selectivity <- function(ld, gear) {
+  sel <- list()
+  sel[[1]] <- ld$fq[[gear]]
+  sel[[2]] <- with(ld, list(
+    si = GSbase[gear],
+    wt = 1,
+    selfun = fSel[GSbase[gear]],
+    par = exp(polSm[sp_i[GSbase[gear]]:sp_e[GSbase[gear]]])
+  ))
+  i <- 3
+  si <- 2L*gear-1L
+  if (ld$GSmix1[si] > 0) {
+    for (gi in ld$GSmix1[si]:ld$GSmix1[si+1L]) {
+      sel[[i]] <- with(ld,
+                       list(
+                     si = GSmix2[gi],
+                     wt = with(ld, exp(polSm[NP + gi])),
+                     selfun = with(ld, fSel[GSmix2[gi]]),
+                     par = with(ld, exp(polSm[sp_i[GSmix2[gi]]:sp_e[GSmix2[gi]]]))
+                     ))
+      i <- i + 1
+    }
+  }
+  return(sel)
+}
 
-lenfreq <- read.csv(file = here("data/bansis_len_freq_data.csv")) |>
-  filter(sciname == "Harpadon nehereus") |>
-  mutate(len = floor(length_cm)) |>
-  group_by(len) |>
-  summarise(fq = sum(frequency)) |>
-  ungroup()
+#' Set selectivity function definitions for a single gear in a list
+#'
+set_selectivity <- function(ld, gear, sel) {
+  # This is a complicated function that will need to rework the data object
+  # because the links between the selectivity functions and the functions
+  # themselves may have changed
+  sel_ind <- integer(length(sel)-1)
+  wt <- double(length(sel)-1)
+  selfun <- sel_ind
 
-data <- data.frame(len = lenfreq$len, fq = lenfreq$fq)
-print(data)
+  for (i in 2:length(sel)) {
+    sel_ind[i-1] <- sel[[i]]$si
+    wt[i-1] <- sel[[i]]$wt
+    selfun[i-1] <- sel[[i]]$selfun
+  }
+  ld <- blicc_selfun(ld, sel_ind, selfun)
+  ld <- blicc_gear_sel(ld, gear_sel = list(sel_ind), gear)
+  if (length(sel_ind) > 1) ld <- blip_mix(ld, gear, mix_wt = wt)
+  for (i in 2:length(sel)) {
+    si <- sel[[i]]$si
+    ld$polSm[ld$sp_i[si]:ld$sp_e[si]] <- log(sel[[i]]$par)
+  }
 
-initial_peak <- 20
-initial_slope <- 3
+  return(ld)
+}
 
+#' Number of selectivities associated with a gear
+#'
+NoofSelect <- function(ld, gear) {
+  si <- 2L*gear-1L
+  if (ld$GSmix1[si] > 0) {
+    N <- 2L + ld$GSmix1[si] - ld$GSmix1[si+1L]
+  } else {
+    N <- 1L
+  }
+  return(N)
+}
+
+#' Get model function index from a slider reference
+#'
+SelectivityN <- function(ld, gear, N) {
+  si <- 2L*gear-1L
+  if (N==1 | ld$GSmix1[si] == 0) {
+    return(ld$GSbase[gear])
+  } else {
+    mix_sel <-  (blicc_ld$GSmix1[si]:blicc_ld$GSmix1[si+1L])[N-1L]
+    return(blicc_ld$GSmix2[mix_sel])
+  }
+}
+
+#' Possible selectivity models
+#'
+select_types <- c("Logistic", "Normal",
+"Single-side Normal", "Double-sided Normal")
+
+# User Interface
 
 ui <- fluidPage(
   theme = shinytheme("darkly"),
-  titlePanel("Plot Selectivity Curve"),
+  titlePanel("Set Prior Selectivity"),
   sidebarLayout(
     sidebarPanel(
       chooseSliderSkin(
         skin = "Flat",
         color = "#941414"),
-      numericInput("num_selectivity_functions",
-                   label = "Number of Selectivity Functions:",
+      actionButton("load", label = "Load Model"),
+      uiOutput("Gears"),
+      numericInput("NoofMix",
+                   label = "Number of Selectivities:",
                    min = 1,
-                   max = 5,
+                   max = 3,
                    value = 1),
-      uiOutput("selectivity_options"),
-      actionButton("plot_btn", "Plot Graph"),
-      actionButton("save", label = "Save Parameters"),
-      actionButton("remove_row", "Remove Last row")
+      numericInput("SelN",
+                   label = "Current Selectivity:",
+                   min = 1,
+                   max = 3,
+                   value = 1),
+      selectInput("fun_type",
+                  label = "Selected Type",
+                  choices = as.list(select_types),
+                  selected = select_types[2]), #   select_types[ld$fSel[ld$GSbase[1]]]),
+      sliderInput("weight",
+                  "Weight",
+                  min = 0, max = 1, value = 1),
+      uiOutput("select_param"),
+      actionButton("plot_btn", "Plot Selectivity"),
+      actionButton("save", label = "Save Parameters")
     ),
-    mainPanel(h2("Plot"),
+    mainPanel(h2("Selectivities"),
               fluidRow(
                 column(
                   width = 9,
-                  h4("Collect Priors"),
                   plotOutput("plot1", click = "plot_click")
-                ),
-                column(width = 3,
-                       h4("Parameter Table"),
-                       tableOutput("parameter_table"))
+                )
               ))
   )
 )
@@ -77,62 +150,83 @@ ui <- fluidPage(
 server <- function(input, output, session) {
 
   shinyjs::enable()
+  load(here("data", "yft_ld.rda"))
+  ld <- yft_ld
 
-  output$selectivity_options <- renderUI({
-    num_functions <- input$num_selectivity_functions
-    selectivity_options <- lapply(1:num_functions, function(i) {
-      tagList(
-        selectInput(paste0("selectivity_function_", i), label = paste("Selectivity Function", i),
-                    choices = list("None", "Logistic", "Double Normal"), selected = "None"),
-        selectInput(paste0("selection_", i), "Select",
-                    choices = list("On", "Off")),
-        sliderInput(paste0("weight_", i), "Weighted distribution",
-                    min = 0, max = 1, value = 1),
-        sliderInput(
-          "peak_slider",
-          "Prior Mean",
-          min = 0,
-          max = 30,
-          value = 12
-        ),
-        sliderInput(
-          "slope_slider",
-          "Prior Slope:",
-          min = 0,
-          max = 10,
-          value = initial_slope
-        ),
-      )
-    })
-    do.call(tagList, selectivity_options)
+  output$Gears <- renderUI({
+    selectInput("Gear",
+                label = "Gear",
+                choices = as.list(ld$gname),
+                selected = ld$gname[1])
   })
 
-  #paraData <- read_xlsx(path =here("data/stock_parameters.xlsx"),
-  #sheet = "parms") |>
-  #dplyr::select(Species, LWa_pub, LWb_pub, vonBLinf,
-  #vonBLinf_lo, vonBLinf_hi, vonBT0, vonBk, Lmat, Lmax)
+  output$select_param <- renderUI({
+   req(input$Gear)
+   NGear <- match(input$Gear, ld$gname)
+   NSelect <- SelectivityN(ld, NGear, input$SelN)
+   if (ld$fSel[NSelect]==4) {
+    list(
+      sliderInput(
+        "peak_slider",
+        "Location",
+        min = ld$LMP[1],
+        max = ld$LMP[ld$NB],
+        value = ld$LMP[ld$NB %/% 2]
+      ),
+      sliderInput(
+          "slope_slider1",
+          "Left Slope:",
+          min = 0,
+          max = ld$LMP[ld$NB] / 4,
+          value = ld$LMP[ld$NB] / 10
+        ),
+        sliderInput(
+          "slope_slider2",
+          "Right Slope:",
+          min = 0,
+          max = ld$LMP[ld$NB] / 4,
+          value = ld$LMP[ld$NB] / 10
+        )
+    )
+    } else {
+      list(
+        sliderInput(
+          "peak_slider",
+          "Location",
+          min = ld$LMP[1],
+          max = ld$LMP[ld$NB],
+          value = ld$LMP[ld$NB %/% 2]
+        ),
+        sliderInput(
+        "slope_slider1",
+        "Slope:",
+        min = 0,
+        max = ld$LMP[ld$NB] / 4,
+        value = ld$LMP[ld$NB] / 10
+        )
+    )}
+    })
 
-  #paraData <- paraData |>
-  #filter(Species == "Harpadon nehereus")
-
-  #params <- reactiveValues(peak = initial_peak, slope = initial_slope)
 
 
   # Define the initial reactiveVal for data
-  dataplot <- reactiveVal(data)
+  dataplot <- reactive({
+    req(input$Gear)
+    NGear <- match(input$Gear, ld$gname)
+    data.frame(len = ld$LMP, fq = ld$fq[[NGear]])
+  })
 
-  # Define reactiveVal for parameter data
-  parameter_data <-
-    reactiveVal(data.frame(peak = numeric(), slope = numeric()))
 
 
   ## 2. Create a plot ##
   output$plot1 <- renderPlot({
+    req(input$Gear)
+    NGear <- match(input$Gear, ld$gname)
     mu <- input$peak_slider
-    sigma <- input$slope_slider
-    curve_data <- data.frame(
-      x = seq(min(data$len), max(data$len), length.out = 30)) |>
-      mutate(y = exp(-0.5*((x-mu)/sigma)^2)*max(data$fq))
+    sigma <- input$slope_slider1
+    weight <- max(ld$fq[[NGear]])*input$weight
+    curve_data <- data.frame(x = ld$LMP,
+                             y = exp(-0.5*((ld$LMP-mu)/sigma)^2)*weight)
 
     req(input$plot_btn)
     print("Rendering plot...")
@@ -141,15 +235,10 @@ server <- function(input, output, session) {
       geom_bar(stat = "identity",
                fill = "#0f2667",
                alpha = 0.7) +
-      #add_curve(input$selectivity_functions, dataplot()) +
       geom_line(data = curve_data, aes(x = x, y = y), color = "#740404") +
-      #geom_smooth(method = "glm", family = gaussian(link = "identity"), se = FALSE,
-      #formula = y ~ dnorm(x, mean = mu, sd = sigma), color = "#941414", linetype = "solid", size = 1) +
       labs(x = "Length", y = "Frequency") +
       theme_minimal() +
       theme(
-        #panel.background = element_rect(fill = "transparent", color = NA),
-        #plot.background = element_rect(fill = "transparent", color = NA),
         panel.grid.major.y = element_blank(),
         panel.grid.minor.y = element_blank(),
         panel.grid.major.x = element_blank(),
@@ -162,55 +251,14 @@ server <- function(input, output, session) {
       )
   })
 
-  #observe weight slider
-  observe({
-    req(input$num_selectivity_functions)
-    num_selectivity <- input$num_selectivity_functions
-    lapply(1:num_selectivity, function(i) {
-      observeEvent(input[[paste0("selectivity_function_", i)]], {
-        req(input[[paste0("selectivity_function_", i)]])
-        req(input[[paste0("weight_", i)]])
-        selectivity_function <- input[[paste0("selectivity_function_", i)]]
-        weight <- input[[paste0("weight_", i)]]
-
-        # incorporate curve function
-        generate_curve <- curve_data(selectivity_function)
-
-        if (selectivity_function == "None") {
-        } else {
-          # Apply weight to the curve data
-          curve_data$y <- curve_data$y * weight
-        }
-        # update a reactiveVal containing plot data
-        update_plot_data(curve_data)
-      })
-    })
-  })
-
-
 
   # observe save button
   observeEvent(input$save, {
-    params <-
-      isolate(c(
+    isolate(
+      params <- c(
         peak = input$peak_slider,
         slope = input$slope_slider
       ))
-    parameter_data(cbind(parameter_data(), params))
-  })
-
-
-  ## observe remove button ##
-  observeEvent(input$remove_row, {
-    current_data <- parameter_data()
-    if (nrow(current_data) > 0) {
-      parameter_data(current_data[-nrow(current_data),])
-    }
-  })
-
-  # render parameter table
-  output$parameter_table <- renderTable({
-    parameter_data()
   })
 
   shinyjs::runjs(
@@ -300,3 +348,34 @@ shinyApp(ui = ui, server = server)
 #output$priors_table <- renderTable({
 #priors()
 #})
+
+# Code to generate multiple sliders dependent on other input
+
+#
+# output$selectivity_options <- renderUI({
+#   selectivity_options <- lapply(1:NSelect(), function(i) {
+#     tagList(
+#       selectInput(paste0("selectivity_function_", i),
+#                   label = paste("Selectivity Function", i),
+#                   choices = list("None", "Logistic", "Normal"),
+#                   selected = "None"),
+#       sliderInput(paste0("weight_", i),
+#                   "Weight",
+#                   min = 0, max = 1, value = 1),
+#       sliderInput(
+#         "peak_slider",
+#         "Prior Mean",
+#         min = ld$LMP[1],
+#         max = ld$LMP[ld$NB],
+#         value = ld$LMP[ld$NB %/% 2]
+#       ),
+#       sliderInput(
+#         "slope_slider",
+#         "Prior Slope:",
+#         min = 0,
+#         max = ld$LMP[ld$NB] / 4,
+#         value = ld$LMP[ld$NB] / 10
+#       ),
+#     )
+#   })
+#   do.call(tagList, selectivity_options)

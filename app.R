@@ -4,13 +4,11 @@
 #2) collect 2 parameters from clicking plot done
 #3) plot a normal selectivity curve over the data using the 2 parameter. done
 
+library("here")
 library("shiny")
 library("ggplot2")
-library("readxl")
 library("stats")
-library("here")
 library("dplyr")
-library("fishblicc")
 library("shinyjs")
 library("shinyalert")
 library("DT")
@@ -18,91 +16,7 @@ library("shinythemes")
 library("shinyWidgets")
 library("jsonlite")
 
-# The following are functions to help manipulate the fishblicc data object
-
-#' Get selectivity function definitions for a single gear in a list
-#'
-get_selectivity <- function(ld, gear) {
-  sel <- list()
-  sel[[1]] <- ld$fq[[gear]]
-  sel[[2]] <- with(ld, list(
-    si = GSbase[gear],
-    wt = 1,
-    selfun = fSel[GSbase[gear]],
-    par = exp(polSm[sp_i[GSbase[gear]]:sp_e[GSbase[gear]]])
-  ))
-  i <- 3
-  si <- 2L*gear-1L
-  if (ld$GSmix1[si] > 0) {
-    for (gi in ld$GSmix1[si]:ld$GSmix1[si+1L]) {
-      sel[[i]] <- with(ld,
-                       list(
-                     si = GSmix2[gi],
-                     wt = with(ld, exp(polSm[NP + gi])),
-                     selfun = with(ld, fSel[GSmix2[gi]]),
-                     par = with(ld, exp(polSm[sp_i[GSmix2[gi]]:sp_e[GSmix2[gi]]]))
-                     ))
-      i <- i + 1
-    }
-  }
-  return(sel)
-}
-
-#' Set selectivity function definitions for a single gear in a list
-#'
-set_selectivity <- function(ld, gear, sel) {
-  # This is a complicated function that will need to rework the data object
-  # because the links between the selectivity functions and the functions
-  # themselves may have changed
-  sel_ind <- integer(length(sel)-1)
-  wt <- double(length(sel)-1)
-  selfun <- sel_ind
-
-  for (i in 2:length(sel)) {
-    sel_ind[i-1] <- sel[[i]]$si
-    wt[i-1] <- sel[[i]]$wt
-    selfun[i-1] <- sel[[i]]$selfun
-  }
-  ld <- blicc_selfun(ld, sel_ind, selfun)
-  ld <- blicc_gear_sel(ld, gear_sel = list(sel_ind), gear)
-  if (length(sel_ind) > 1) ld <- blip_mix(ld, gear, mix_wt = wt)
-  for (i in 2:length(sel)) {
-    si <- sel[[i]]$si
-    ld$polSm[ld$sp_i[si]:ld$sp_e[si]] <- log(sel[[i]]$par)
-  }
-
-  return(ld)
-}
-
-#' Number of selectivities associated with a gear
-#'
-NoofSelect <- function(ld, gear) {
-  si <- 2L*gear-1L
-  if (ld$GSmix1[si] > 0) {
-    N <- 2L + ld$GSmix1[si] - ld$GSmix1[si+1L]
-  } else {
-    N <- 1L
-  }
-  return(N)
-}
-
-#' Get model function index from a slider reference
-#'
-SelectivityN <- function(ld, gear, N) {
-  si <- 2L*gear-1L
-  if (N==1 | ld$GSmix1[si] == 0) {
-    return(ld$GSbase[gear])
-  } else {
-    mix_sel <-  (blicc_ld$GSmix1[si]:blicc_ld$GSmix1[si+1L])[N-1L]
-    return(blicc_ld$GSmix2[mix_sel])
-  }
-}
-
-#' Possible selectivity models
-#'
-select_types <- c("Logistic", "Normal",
-"Single-side Normal", "Double-sided Normal")
-
+source(here("R", "fishblicc_shiny_functions.R"))
 # User Interface
 
 ui <- fluidPage(
@@ -150,7 +64,7 @@ ui <- fluidPage(
 server <- function(input, output, session) {
 
   shinyjs::enable()
-  load(here("data", "yft_ld.rda"))
+  load(here("data", "yft_ld.rda"))  # temporary load
   ld <- yft_ld
 
   output$Gears <- renderUI({
@@ -161,7 +75,7 @@ server <- function(input, output, session) {
   })
 
   output$select_param <- renderUI({
-   req(input$Gear)
+   req(input$Gear, input$SelN)
    NGear <- match(input$Gear, ld$gname)
    NSelect <- SelectivityN(ld, NGear, input$SelN)
    if (ld$fSel[NSelect]==4) {
@@ -209,33 +123,42 @@ server <- function(input, output, session) {
 
 
 
-  # Define the initial reactiveVal for data
-  dataplot <- reactive({
+  # Define the reactive for frequency data
+  observe_df <- reactive({
     req(input$Gear)
     NGear <- match(input$Gear, ld$gname)
     data.frame(len = ld$LMP, fq = ld$fq[[NGear]])
   })
 
 
+  # Define the reactive for the mortality
+  mort_ls <- reactive({
+    req(input$Gear, input$SelN)
+    NGear <- match(input$Gear, ld$gname)
+    NSel <- SelectivityN(ld, NGear, input$SelN)
+    ld$fSel[NSel] <- match(input$fun_type, select_types)
+    mortality(ld, NSel, NGear)
+  })
+
+
+  # Define the reactive for expected frequency
+  expect_df <- reactive({
+    req(input$Gear, input$peak_slider, input$slope_slider1)
+    NSample <- sum(ld$fq[[input$Gear]])
+    spar <- c(input$peak_slider, 1/input$slope_slider1)
+    expect_freq(ld, mort_ls(), spar, NSample)
+  })
+
 
   ## 2. Create a plot ##
   output$plot1 <- renderPlot({
-    req(input$Gear)
-    NGear <- match(input$Gear, ld$gname)
-    mu <- input$peak_slider
-    sigma <- input$slope_slider1
-    weight <- max(ld$fq[[NGear]])*input$weight
-    curve_data <- data.frame(x = ld$LMP,
-                             y = exp(-0.5*((ld$LMP-mu)/sigma)^2)*weight)
-
     req(input$plot_btn)
-    print("Rendering plot...")
 
-    ggplot(dataplot(), aes(x = len, y = fq)) +
+    ggplot(observe_df(), aes(x = len, y = fq)) +
       geom_bar(stat = "identity",
                fill = "#0f2667",
                alpha = 0.7) +
-      geom_line(data = curve_data, aes(x = x, y = y), color = "#740404") +
+      geom_line(data = expect_df(), aes(x = LMP, y = Freq, color = Selectivity)) +
       labs(x = "Length", y = "Frequency") +
       theme_minimal() +
       theme(
@@ -246,7 +169,7 @@ server <- function(input, output, session) {
         axis.line = element_line(color = "black"),
         axis.text = element_text(color = "black", size = 15),
         # Adjust size as needed
-        axis.ticks = element_line(color = "black", size = 1),
+        axis.ticks = element_line(color = "black", linewidth = 1),
         axis.title = element_text(color = "black", size = 15)
       )
   })

@@ -74,6 +74,11 @@ server <- function(input, output, session) {
                 selected = ld$gname[1])
   })
 
+  NGears <- reactiveVal(
+    value=4
+    #match(input$Gear, ld$gname)
+    )
+
   output$select_param <- renderUI({
    req(input$Gear, input$SelN)
    NGear <- match(input$Gear, ld$gname)
@@ -130,6 +135,16 @@ server <- function(input, output, session) {
     data.frame(len = ld$LMP, fq = ld$fq[[NGear]])
   })
 
+  # Define the reactive for expected frequency
+  expect_df <- reactive({
+    req(input$Gear, input$SelN, input$peak_slider, input$slope_slider1)
+    NGear <- match(input$Gear, ld$gname)
+    NSel <- SelectivityN(ld, NGear, input$SelN)
+    NSample <- sum(ld$fq[[input$Gear]])
+    mort <- mortality(ld, NSel, NGear)
+    spar <- c(input$peak_slider, input$slope_slider1)
+    expect <- expect_freq(ld, mort, spar, NSample)
+  })
 
   # Define the reactive for the mortality
   mort_ls <- reactive({

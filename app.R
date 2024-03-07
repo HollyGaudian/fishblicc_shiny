@@ -17,16 +17,54 @@ library("shinyWidgets")
 library("jsonlite")
 
 source(here("R", "fishblicc_shiny_functions.R"))
-# User Interface
+
+generate_tab_layout <- function(tab_index) {
+  tabPanel(
+    paste("Tab", tab_index),
+    sidebarPanel(
+      chooseSliderSkin(
+        skin = "Flat",
+        color = "#941414"),
+      numericInput("NoofMix",
+                   label = "Number of Selectivities:",
+                   min = 1,
+                   max = 7,
+                   value = 1),
+      numericInput("SelN",
+                   label = "Current Selectivity:",
+                   min = 1,
+                   max = 7,  # Placeholder, will be updated dynamically
+                   value = 1),
+      selectInput("fun_type",
+                  label = "Selected Type",
+                  choices = as.list(select_types),
+                  selected = select_types[2]), #   select_types[data$fSel[data$GSbase[1]]]),
+      sliderInput("weight",
+                  "Weight",
+                  min = 0, max = 1, value = 1),
+      actionButton("plot_btn", "Plot Selectivity"),
+    mainPanel(h2("Plot"),
+              plotOutput(paste0("plot1", tab_index))
+    )
+
+    )
+  )
+}
+
 
 ui <- fluidPage(
   theme = shinytheme("darkly"),
-  titlePanel("Select the Selectivity selection"),
+  titlePanel("Selectivity"),
   sliderInput("num_tabs", "Number of gears:", min = 1, max = 7, value = 3),
   fileInput("load", label = "Load Model Data (.rda format)", accept = c(".rda")),
   uiOutput("dynamic_tabs"),
-  uiOutput("Gear")
-)
+
+  uiOutput("Gear"),
+  uiOutput("seln_input"),
+  uiOutput("select_param")
+  )
+
+
 
 
 server <- function(input, output, session) {
@@ -35,6 +73,22 @@ server <- function(input, output, session) {
 
   data <- reactiveVal(NULL)
   gears <- reactiveVal(NULL)
+  seln <- reactiveVal(NULL)
+
+
+
+  # Reactive expression to ensure SelN does not exceed NoofMix
+  max_sel_n <- reactive({
+    req(input$NoofMix)
+    max(input$SelN, input$NoofMix)
+  })
+
+  # Update SelN based on NoofMix
+  observe({
+    updateNumericInput(session, "SelN", max = max_sel_n())
+  })
+
+##Data
 
   loaded_data <- reactive({
     req(input$load)
@@ -83,40 +137,8 @@ server <- function(input, output, session) {
 
 
 
-  generate_tab_layout <- function(tab_index) {
-    tabPanel(
-      paste("Tab", tab_index),
-      sidebarPanel(
-        chooseSliderSkin(
-          skin = "Flat",
-          color = "#941414"),
-        numericInput("NoofMix",
-                     label = "Number of Selectivities:",
-                     min = 1,
-                     max = 3,
-                     value = 1),
-        numericInput("SelN",
-                     label = "Current Selectivity:",
-                     min = 1,
-                     max = 3,
-                     value = 1),
-        selectInput("fun_type",
-                    label = "Selected Type",
-                    choices = as.list(select_types),
-                    selected = select_types[2]), #   select_types[data$fSel[data$GSbase[1]]]),
-        sliderInput("weight",
-                    "Weight",
-                    min = 0, max = 1, value = 1),
-        uiOutput("select_param"),
-        actionButton("plot_btn", "Plot Selectivity"),
-      ),
-      mainPanel(h2("Plot"),
-                plotOutput(paste0("plot1", tab_index))
 
-
-      ))
-  }
-
+## Tabs
 
   tab_layouts <- reactive({
     num_tabs <- input$num_tabs

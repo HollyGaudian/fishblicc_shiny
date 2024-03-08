@@ -188,4 +188,3 @@ SelectivityN <- function(ld, gear, N) {
   }
 }
 
-#>>>>>>> 85595fc4b03cfe63c5c8b0cfe2ab8c1dd539179f

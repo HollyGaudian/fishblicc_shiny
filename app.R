@@ -18,6 +18,10 @@ library("jsonlite")
 
 source(here("R", "fishblicc_shiny_functions.R"))
 
+
+
+# Generate tabs -----------------------------------------------------------
+
 generate_tab_layout <- function(tab_index) {
   tabPanel(
     paste("Tab", tab_index),
@@ -43,7 +47,7 @@ generate_tab_layout <- function(tab_index) {
                   "Weight",
                   min = 0, max = 1, value = 1),
       actionButton("plot_btn", "Plot Selectivity"),
-    mainPanel(h2("Plot"),
+    mainPanel(h3("Plot"),
               plotOutput(paste0("plot1", tab_index))
     )
 
@@ -52,18 +56,18 @@ generate_tab_layout <- function(tab_index) {
 }
 
 
+# UI ----------------------------------------------------------------------
+
 ui <- fluidPage(
   theme = shinytheme("darkly"),
   titlePanel("Selectivity"),
   sliderInput("num_tabs", "Number of gears:", min = 1, max = 7, value = 3),
   fileInput("load", label = "Load Model Data (.rda format)", accept = c(".rda")),
   uiOutput("dynamic_tabs"),
-
-  uiOutput("Gear"),
+  uiOutput("gear"),
   uiOutput("seln_input"),
   uiOutput("select_param")
   )
-
 
 
 
@@ -77,6 +81,7 @@ server <- function(input, output, session) {
 
 
 
+# Selectivity bars --------------------------------------------------------
   # Reactive expression to ensure SelN does not exceed NoofMix
   max_sel_n <- reactive({
     req(input$NoofMix)
@@ -88,7 +93,7 @@ server <- function(input, output, session) {
     updateNumericInput(session, "SelN", max = max_sel_n())
   })
 
-##Data
+# Data Loading ------------------------------------------------------------
 
   loaded_data <- reactive({
     req(input$load)
@@ -99,8 +104,8 @@ server <- function(input, output, session) {
     # Attempt to load the file with error handling
     loaded_data <- tryCatch(
       {
-        load(inFile$datapath)
-        get("data")  # Replace "yft_ld" with the correct name of the loaded data object
+        load(inFile$datapath, envir=temp)
+        return(get(ls(temp)[1], envir=temp))  # Replace "yft_ld" with the correct name of the loaded data object
       },
       error = function(e) {
         message("Error loading file: ", e$message)
@@ -116,7 +121,7 @@ server <- function(input, output, session) {
     str(loaded_data())
 
     # Check if the loaded object contains the 'gname' column
-    if (!is.null(loaded_data()) && "gname" %in% colnames(loaded_data())) {
+    if (!is.null(loaded_data()) && "gname" %in% names(loaded_data())) {
       data(loaded_data())
       gears(unique(loaded_data()$gname))
     } else {
@@ -126,19 +131,26 @@ server <- function(input, output, session) {
     }
   })
 
-  output$gears_select <- renderUI({
-    req(gears())
-    if (!is.null(gears())) {
-      selectInput("selected_gear", "Select Gear:", choices = gears(), selectize = FALSE)
-    } else {
-      HTML("No 'gname' column found in the loaded data.")
-    }
+
+# gname -------------------------------------------------------------------
+
+  #output$gear <- renderUI({
+    #req(gears())
+    #if (!is.null(gears())) {
+      #selectInput("gears_select", "Select Gear:", choices = gears(), selectize = FALSE)
+    #} else {
+      #HTML("No 'gname' column found in the loaded data.")
+    #}
+  #})
+
+  # Render dropdown menu with options from "gname" column
+  output$gear <- renderUI({
+    req(data())
+    selectInput("gear_select", "Select gear:",
+                choices = unique(data()$gname))
   })
+# Tabs Reactive--------------------------------------------------------------------
 
-
-
-
-## Tabs
 
   tab_layouts <- reactive({
     num_tabs <- input$num_tabs
@@ -182,15 +194,7 @@ server <- function(input, output, session) {
 
       })
 
-
-    # Render dropdown menu with options from "gname" column
-    output$Gear <- renderUI({
-      req(data())
-      selectInput("gear_select", "Select gear:",
-                  choices = unique(data()$gname))
-    })
-
-
+# select_param ------------------------------------------------------------
 
   NGears <- reactiveVal(
     value=4
@@ -246,6 +250,8 @@ server <- function(input, output, session) {
 
 
 
+# plotting functions ---------------------------------------------------------------
+
   # Define the reactive for frequency data
   observe_df <- reactive({
     req(input$Gear)
@@ -283,6 +289,7 @@ server <- function(input, output, session) {
   })
 
 
+# slider edit -------------------------------------------------------------
   shinyjs::runjs(
     '$("#peak_slider").css("background-color", "#941414"); $("#slope_slider").css("background-color", "#941414");'
   )
@@ -292,6 +299,9 @@ server <- function(input, output, session) {
 
 shinyApp(ui = ui, server = server)
 
+
+
+# delete at end -----------------------------------------------------------
 
 # Table to display click coordinates
 #output$parameter_table <- renderTable({

@@ -96,6 +96,16 @@ expect_freq <- function(blicc_ld, mort, spar, N) {
                     Selectivity = rep(c("Gear", "Component"), each=length(sel))))
 }
 
+
+get_sel_indices <- function(ld, gear_name) {
+  gi <- match(gear_name, ld$gname)
+  si <- 2L*gi-1L
+  if (ld$GSmix1[si] > 0)
+    return(with(ld, c(GSbase[gi], GSmix2[GSmix1[si]:GSmix1[si+1L]])))
+  else return(ld$GSbase[gi])
+}
+
+
 # mort <- mortality(yft_ld, 4, 4)
 #
 # spar <- with(yft_ld, exp(polSm[mort$par_indx]))

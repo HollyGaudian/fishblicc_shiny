@@ -296,8 +296,13 @@ server <- function(input, output, session) {
                   min = 0, max = 1, value = sel_wts[[input$Gear_N]][Cur_SelComp()])
     return(sliders)
   })
+<<<<<<< HEAD
 
 
+=======
+#
+#
+>>>>>>> 54b599bed965583d6dad7fd1daf352078dad8469
 #
 # # plotting functions ---------------------------------------------------------------
 #

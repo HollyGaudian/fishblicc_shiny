@@ -8,10 +8,10 @@ library("here")
 library("shiny")
 library("ggplot2")
 library("stats")
-library("dplyr")
+#library("dplyr")
 library("shinyjs")
 library("shinyalert")
-library("DT")
+#library("DT")
 library("shinythemes")
 library("shinyWidgets")
 library("jsonlite")
@@ -19,55 +19,63 @@ library("jsonlite")
 source(here("R", "fishblicc_shiny_functions.R"))
 
 
-
-# Generate tabs -----------------------------------------------------------
-
-generate_tab_layout <- function(tab_index) {
-  tabPanel(
-    paste("Tab", tab_index),
-    sidebarPanel(
-      chooseSliderSkin(
-        skin = "Flat",
-        color = "#941414"),
-      numericInput("NoofMix",
-                   label = "Number of Selectivities:",
-                   min = 1,
-                   max = 7,
-                   value = 1),
-      numericInput("SelN",
-                   label = "Current Selectivity:",
-                   min = 1,
-                   max = 7,  # Placeholder, will be updated dynamically
-                   value = 1),
-      selectInput("fun_type",
-                  label = "Selected Type",
-                  choices = as.list(select_types),
-                  selected = select_types[2]), #   select_types[data$fSel[data$GSbase[1]]]),
-      sliderInput("weight",
-                  "Weight",
-                  min = 0, max = 1, value = 1),
-      actionButton("plot_btn", "Plot Selectivity"),
-    mainPanel(h3("Plot"),
-              plotOutput(paste0("plot1", tab_index))
-    )
-
-    )
-  )
-}
-
-
 # UI ----------------------------------------------------------------------
 
 ui <- fluidPage(
   theme = shinytheme("darkly"),
   titlePanel("Selectivity"),
-  sliderInput("num_tabs", "Number of gears:", min = 1, max = 7, value = 3),
-  fileInput("load", label = "Load Model Data (.rda format)", accept = c(".rda")),
-  uiOutput("dynamic_tabs"),
-  uiOutput("gear"),
-  uiOutput("seln_input"),
-  uiOutput("select_param")
+  sidebarLayout(
+    sidebarPanel(
+    # File input
+      fileInput("load", label = "Load Model Data (.rda format)",
+                accept = c(".rda")),
+    # Gears and selectivity components
+      numericInput("NoofSel",
+                   label = "Number of Selectivity Components:",
+                   min = 0,
+                   max = 7,
+                   value = 0),
+      radioButtons(
+        "Gear_N",
+        label = "Current Gear:",
+        choices = "None",
+        selected = NULL,
+        inline = TRUE,
+        width = NULL
+      ),
+      checkboxGroupInput("Select",
+                         label = "Selectivity Components:",
+                         choices = "None",
+                         selected = NULL,
+                         inline = TRUE,
+                         width = NULL
+      ),
+      radioButtons(
+        "Sel_N",
+        label = "Current Selectivity:",
+        choices = "None",
+        selected = NULL,
+        inline = TRUE,
+        width = NULL
+      ),
+      selectInput("fun_type",
+                  label = "Selected Type",
+                  choices = as.list(select_types),
+                  selected = select_types[1]),
+      chooseSliderSkin(
+        skin = "Flat",
+        color = "#941414"),
+      uiOutput("select_param")
+    ),
+    # plot selectivity
+   mainPanel(h3("Selectivity"),
+             plotOutput("plot1")
+   ),
   )
+  #uiOutput("dynamic_tabs"),
+  # uiOutput("gear"),
+  # uiOutput("seln_input"),
+)
 
 
 
@@ -75,102 +83,154 @@ server <- function(input, output, session) {
 
   shinyjs::enable()
 
-  data <- reactiveVal(NULL)
-  gears <- reactiveVal(NULL)
-  seln <- reactiveVal(NULL)
-
-
-
-# Selectivity bars --------------------------------------------------------
-  # Reactive expression to ensure SelN does not exceed NoofMix
-  max_sel_n <- reactive({
-    req(input$NoofMix)
-    max(input$SelN, input$NoofMix)
-  })
-
-  # Update SelN based on NoofMix
-  observe({
-    updateNumericInput(session, "SelN", max = max_sel_n())
-  })
+# Declarations ------------------------------------------------------------
+  blicc_ld <- reactiveVal(NULL)  # blicc data list
+  gear_names <- reactiveVal(NULL)
+  # seln <- reactiveVal(NULL)
+  NGears <- reactiveVal(0)
+  fsel <- reactiveVal(0)         # Selectivity component functions
+  sel_par <- reactiveValues()    # Selectivity parameters by selectivity component
+  sel_fun <- reactiveValues()    # Selectivity components by gear
+  sel_wts <- reactiveValues()    # Selectivity component weights by gear
 
 # Data Loading ------------------------------------------------------------
 
-  loaded_data <- reactive({
+  file_data <- reactive({
     req(input$load)
     inFile <- input$load
     if (is.null(inFile))
       return(NULL)
 
     # Attempt to load the file with error handling
-    loaded_data <- tryCatch(
+    tryCatch(
       {
-        load(inFile$datapath, envir=temp)
-        return(get(ls(temp)[1], envir=temp))  # Replace "yft_ld" with the correct name of the loaded data object
+        tmp <- new.env()
+        load(inFile$datapath, envir=tmp)
+        return(get(ls(envir=tmp)[1], envir=tmp))
       },
       error = function(e) {
         message("Error loading file: ", e$message)
         return(NULL)
       }
     )
-    return(loaded_data)
   })
 
+  # Update everything based on the loaded data
   observe({
-    req(loaded_data())
+    req(file_data())
 
-    str(loaded_data())
-
-    # Check if the loaded object contains the 'gname' column
-    if (!is.null(loaded_data()) && "gname" %in% names(loaded_data())) {
-      data(loaded_data())
-      gears(unique(loaded_data()$gname))
+    if (is.null(file_data())) {
+      NGears(0)
+      gear_names(NULL)
+      updateNumericInput(session, "NoofSel", value = 0)
+      fsel(0)
     } else {
-      # If 'gname' column does not exist, show a warning and assign NULL to gears
-      warning("Column 'gname' not found in the loaded data.")
-      gears(NULL)
+      # Need to check data list is correct format blicc_ld
+      if ("gname" %in% names(file_data())) {
+        blicc_ld(file_data())
+        NGears(file_data()$NG)
+        gear_names(file_data()$gname)
+        fsel(file_data()$fSel)
+        for (si in 1:file_data()$NS)
+          sel_par[[as.character(si)]] <- with(file_data(), exp(polSm[sp_i[si]:sp_e[si]]))
+        for (gi in 1:file_data()$NG) {
+          sf <- file_data()$GSbase[gi]
+          sw <- 1
+          si <- (gi-1L)*2L+1L
+          if (file_data()$GSmix1[si] > 0) {
+            sf <- with(file_data(), c(sf, GSmix2[GSmix1[si]:GSmix1[si+1L]]))
+            sw <- with(file_data(), c(sw, exp(polSm[NP+GSmix1[si]:GSmix1[si+1L]])))
+            }
+          # names(sf) <- as.character(sf)
+          # names(sw) <- as.character(sf)
+          sel_fun[[gear_names()[gi]]] <- sf
+          sel_wts[[gear_names()[gi]]] <- sw
+        }
+        updateNumericInput(session, "NoofSel", value = file_data()$NS)
+        updateRadioButtons(session, "Gear_N", label = "Current Gear:",
+          choices = file_data()$gname,
+          selected = file_data()$gname[1],
+          inline = TRUE
+        )
+      }
     }
   })
 
 
-# gname -------------------------------------------------------------------
 
-  #output$gear <- renderUI({
-    #req(gears())
-    #if (!is.null(gears())) {
-      #selectInput("gears_select", "Select Gear:", choices = gears(), selectize = FALSE)
-    #} else {
-      #HTML("No 'gname' column found in the loaded data.")
-    #}
-  #})
+  # Update Gear -----------------------------------------------------------
 
-  # Render dropdown menu with options from "gname" column
-  output$gear <- renderUI({
-    req(data())
-    selectInput("gear_select", "Select gear:",
-                choices = unique(data()$gname))
-  })
-# Tabs Reactive--------------------------------------------------------------------
-
-
-  tab_layouts <- reactive({
-    num_tabs <- input$num_tabs
-
-    tabs <- lapply(1:num_tabs, generate_tab_layout)
-
-    do.call(tabsetPanel, tabs)
+  Cur_Gear <- reactive({
+    return(match(input$Gear_N, gear_names()))
   })
 
+  # Change current gear
+  observe({
+    req(input$Gear_N, blicc_ld())
+    sel_comp <- sel_fun[[input$Gear_N]] #get_sel_indices(blicc_ld(), input$Gear_N)
+    updateCheckboxGroupInput(session, "Select",
+                             choices = as.character(1:NoofSelComp()),
+                             selected = sel_comp,
+                             inline = TRUE)
+    updateRadioButtons(session, "Sel_N",
+                       choices = as.character(sel_comp),
+                       selected = sel_comp[1],
+                       inline = TRUE)
+    }) |>
+  bindEvent(input$Gear_N)
 
-  output$dynamic_tabs <- renderUI({
-    tab_layouts()
+  ## Selectivity components ----
+
+  NoofSelComp <- reactive({
+    return(input$NoofSel)
   })
 
-  observeEvent(input$num_tabs, {
-    num_tabs <- input$num_tabs
+  # The selectivity function being edited
+  Cur_Sel <- reactive({
+    req(input$Sel_N)
+    return(as.integer(input$Sel_N))
+  })
 
-    lapply(1:num_tabs, function(i) {
-      output[[paste0("plot1", i)]] <- renderPlot({
-        req(input$plot_btn)
+  # The component selectivity index in the current gear
+  Cur_SelComp <- reactive({
+    req(input$Gear_N, input$Sel_N)
+    sc <- which(sel_fun[[input$Gear_N]]==as.integer(input$Sel_N))
+    if (length(sc)==0) sc <- 1  # for when input$Gear_N, input$Sel_N are not synchronised
+    return(sc) #find gear selectivity component
+  })
+
+  observe({
+    req(Cur_Sel())
+    updateSelectInput(session,
+                      "fun_type",
+                      label = "Selected Type",
+                      choices = as.list(select_types),
+                      selected = select_types[fsel()[Cur_Sel()]])
+    updateSliderInput(session,
+          inputId = "peak_slider",
+          value = sel_par[[as.character(Cur_Sel())]][1]
+    )
+    updateSliderInput(session,
+          inputId = "slope_slider1",
+          value = 1/sel_par[[as.character(Cur_Sel())]][2]
+    )
+    if (fsel()[Cur_Sel()]==4) {
+      updateSliderInput(session,
+          inputId = "slope_slider2",
+          value = 1/sel_par[[as.character(Cur_Sel())]][3]
+        )
+    }
+    if (Cur_SelComp() > 1)
+      updateSliderInput(session,
+                        inputId = "weight",
+                        value = sel_wts[[input$Gear_N]][Cur_SelComp()])
+  }) |>
+  bindEvent(input$Sel_N)
+
+
+  observe({
+      output$plot1 <- renderPlot({
+        req(observe_df(), expect_df())
 
         ggplot(observe_df(), aes(x = len, y = fq)) +
           geom_bar(stat = "identity",
@@ -196,220 +256,155 @@ server <- function(input, output, session) {
 
 # select_param ------------------------------------------------------------
 
-  NGears <- reactiveVal(
-    value=4
-    #match(input$Gear, data$gname)
-    )
-
+  # This needs to change every time the selectivity function changes
   output$select_param <- renderUI({
-   req(input$Gear, input$SelN)
-   NGear <- match(input$Gear, data$gname)
-   NSelect <- SelectivityN(data, NGear, input$SelN)
-   if (data$fSel[NSelect]==4) {
-    list(
+    req(blicc_ld(), Cur_Sel(), input$Gear_N, Cur_SelComp())
+    min_length <- blicc_ld()$LMP[1]
+    mid_length <- blicc_ld()$LMP[blicc_ld()$NB %/% 2]
+    max_length <- blicc_ld()$LMP[blicc_ld()$NB]
+    sliders <- list(
       sliderInput(
         "peak_slider",
         "Location",
-        min = data$LMP[1],
-        max = data$LMP[data$NB],
-        value = data$LMP[data$NB %/% 2]
+        min = min_length,
+        max = max_length,
+        value = mid_length
       ),
       sliderInput(
-          "slope_slider1",
-          "Left Slope:",
-          min = 0,
-          max = data$LMP[data$NB] / 4,
-          value = data$LMP[data$NB] / 10
-        ),
+        "slope_slider1",
+        "Left Slope:",
+        min = 0,
+        max = max_length / 4,
+        value = max_length / 10
+      )
+    )
+
+    sl <- 3
+    if (fsel()[Cur_Sel()]==4) {
+      sliders[[3]] <-
         sliderInput(
           "slope_slider2",
           "Right Slope:",
           min = 0,
-          max = data$LMP[data$NB] / 4,
-          value = data$LMP[data$NB] / 10
+          max = max_length / 4,
+          value = max_length / 10
         )
-    )
-    } else {
-      list(
-        sliderInput(
-          "peak_slider",
-          "Location",
-          min = data$LMP[1],
-          max = data$LMP[data$NB],
-          value = data$LMP[data$NB %/% 2]
-        ),
-        sliderInput(
-        "slope_slider1",
-        "Slope:",
-        min = 0,
-        max = data$LMP[data$NB] / 4,
-        value = data$LMP[data$NB] / 10
-        )
-    )}
-    })
-
-
-
-# plotting functions ---------------------------------------------------------------
-
-  # Define the reactive for frequency data
-  observe_df <- reactive({
-    req(input$Gear)
-    NGear <- match(input$Gear, data$gname)
-    data.frame(len = data$LMP, fq = data$fq[[NGear]])
+      sl <- 4
+    }
+    if (Cur_SelComp() > 1)
+      sliders[[sl]] <- sliderInput("weight", "Mix Weight",
+                  min = 0, max = 1, value = sel_wts[[input$Gear_N]][Cur_SelComp()])
+    return(sliders)
   })
-
-  # Define the reactive for expected frequency
-  expect_df <- reactive({
-    req(input$Gear, input$SelN, input$peak_slider, input$slope_slider1)
-    NGear <- match(input$Gear, data$gname)
-    NSel <- SelectivityN(data, NGear, input$SelN)
-    NSample <- sum(data$fq[[input$Gear]])
-    mort <- mortality(data, NSel, NGear)
-    spar <- c(input$peak_slider, input$slope_slider1)
-    expect <- expect_freq(data, mort, spar, NSample)
+#
+#
+#
+# # plotting functions ---------------------------------------------------------------
+#
+#   # Define the reactive for frequency data
+  observe_df <- reactive({
+    req(blicc_ld(), input$Gear_N)
+    data.frame(len = blicc_ld()$LMP, fq = blicc_ld()$fq[[input$Gear_N]])
   })
 
   # Define the reactive for the mortality
   mort_ls <- reactive({
-    req(input$Gear, input$SelN)
-    NGear <- match(input$Gear, data$gname)
-    NSel <- SelectivityN(data, NGear, input$SelN)
-    data$fSel[NSel] <- match(input$fun_type, select_types)
-    mortality(data, NSel, NGear)
+    req(blicc_ld(), Cur_Sel(), Cur_Gear())
+    mortality(blicc_ld(), Cur_Sel(), Cur_Gear())
   })
 
 
   # Define the reactive for expected frequency
   expect_df <- reactive({
-    req(input$Gear, input$peak_slider, input$slope_slider1)
-    NSample <- sum(data$fq[[input$Gear]])
+    req(blicc_ld(), input$Gear_N, input$peak_slider, input$slope_slider1)
+    NSample <- sum(blicc_ld()$fq[[input$Gear_N]])
     spar <- c(input$peak_slider, 1/input$slope_slider1)
-    expect_freq(data, mort_ls(), spar, NSample)
+    expect_freq(blicc_ld(), mort_ls(), spar, NSample)
   })
 
 
 # slider edit -------------------------------------------------------------
-  shinyjs::runjs(
-    '$("#peak_slider").css("background-color", "#941414"); $("#slope_slider").css("background-color", "#941414");'
+shinyjs::runjs(
+  '$("#peak_slider").css("background-color", "#941414"); $("#slope_slider").css("background-color", "#941414");'
   )
 
-  })
 }
+
+
+
+
+
+# run app -------------------------------------------------------------
 
 shinyApp(ui = ui, server = server)
 
 
 
-# delete at end -----------------------------------------------------------
-
-# Table to display click coordinates
-#output$parameter_table <- renderTable({
-#parameter_data()
-#})
-
-# Button to save the latest parameters
-#observeEvent(input$save, {
-#new_row <- data.frame(
-#Peak_X = input$peak_slider,
-#Slope = input$slope_slider
-#)
-#parameter_data(rbind(parameter_data(), new_row))
-#})
+# Tabs --------------------------------------------------------------------
 
 
-
-#each input is a factor so levels are consistent for plotting characteristics
-#click_x <- data.frame(x = input$plot_click$x,
-#y = input$plot_click$y,
-#selfun = factor(input$selfun,
-#levels = c("Logistic", "Normal", "Single Normal", "Double Normal")
-#),
-#row.names = NULL,
-#stringsAsFactors = FALSE
-#)
-# add row to the data.frame
-#values$DT <- rbind(values$DT, add_row)
-
-
-# function to add selected curve to plot
-
-#add_curve <- function(selectivity, data) {
-#if(selectivity == "None") {
-# return(NULL)
-#} else if (selectivity == "Logistic") {
-#return(geom_smooth(method = "glm", stat = "smooth", position = "identity", method.args = list(family = "binomial"), se = FALSE, color = "red"))
-#} else if (selectivity == "Normal") {
-#return(geom_density(aes(y = after_stat(y)), color = "red"))
-#} else if (selectivity == "Single Normal") {
-# mu <- mean(data$len)
-#sigma <- sd(data$len)
-#return(geom_function(fun = dnorm, args = list(mean = mu, sd = sigma), aes(y = after_stat(y)), color = "red"))
-#} else if (selectivity == "Double Normal") {
-#mu1 <- mean(data$len) - 5
-#mu2 <- mean(data$len) + 5
-#sigma <- sd(data$len)
-#return(
-#geom_function(fun = dnorm, args = list(mean = mu1, sd = sigma), aes(y = after_stat(y)), color = "red") +
-#geom_function(fun = dnorm, args = list(mean = mu2, sd = sigma), aes(y = after_stat(y)), color = "red")
-#)
-#} else {
-# return(NULL)
-#}
-#}
-
-
-
-
-## 4. remove row on actionButton click ##
-#observeEvent(input$rem_point, {
-#rem_row <- values$DT[-nrow(values$DT), ]
-#values$DT <- rem_row
-#})
-
-
-
-#isolate(reactiveValuesToList(values))
-
-
-
-#observeEvent(input$save_button, {
-#current_priors <- bind_rows(priors(), data.frame(peak = input$peak, Slope = input$slope))
-#priors(current_priors)
-#})
-
-#display on table
-#output$priors_table <- renderTable({
-#priors()
-#})
-
-# Code to generate multiple sliders dependent on other input
-
-#
-# output$selectivity_options <- renderUI({
-#   selectivity_options <- lapply(1:NSelect(), function(i) {
-#     tagList(
-#       selectInput(paste0("selectivity_function_", i),
-#                   label = paste("Selectivity Function", i),
-#                   choices = list("None", "Logistic", "Normal"),
-#                   selected = "None"),
-#       sliderInput(paste0("weight_", i),
+# generate_tab_layout <- function(tab_index, gear_name) {
+#   tabPanel(
+#     title=gear_name,
+#     value=tab_index,
+#     sidebarPanel(
+#       chooseSliderSkin(
+#         skin = "Flat",
+#         color = "#941414"),
+#       checkboxGroupInput("Select",
+#                          label = "Selectivity Components:",
+#                          choices = as.character(1:7),
+#                          selected = NULL,
+#                          inline = TRUE,
+#                          width = NULL
+#       ),
+#       radioButtons(
+#         "Sel_N",
+#         label = "Current Selectivity:",
+#         choices = as.character(1:7),
+#         selected = NULL,
+#         inline = TRUE,
+#         width = NULL
+#       ),
+#       selectInput("fun_type",
+#                   label = "Selected Type",
+#                   choices = as.list(select_types),
+#                   selected = select_types[2]), #   select_types[data$fSel[data$GSbase[1]]]),
+#       sliderInput("weight",
 #                   "Weight",
 #                   min = 0, max = 1, value = 1),
-#       sliderInput(
-#         "peak_slider",
-#         "Prior Mean",
-#         min = data$LMP[1],
-#         max = data$LMP[data$NB],
-#         value = data$LMP[data$NB %/% 2]
-#       ),
-#       sliderInput(
-#         "slope_slider",
-#         "Prior Slope:",
-#         min = 0,
-#         max = data$LMP[data$NB] / 4,
-#         value = data$LMP[data$NB] / 10
-#       ),
+#       actionButton("plot_btn", "Plot Selectivity") #,
+#       # mainPanel(h3("Plot"),
+#       #           plotOutput(paste0("plot1", tab_index))
+#       # )
+#
 #     )
-#   })
-#   do.call(tagList, selectivity_options)
+#   )
+# }
+
+
+
+# gear_tabs <- reactive({
+#   tabs <- list()
+#   if (NGears()>0) {
+#     for (i in 1:NGears())
+#       tabs[[i]] <- generate_tab_layout(i, gear_names()[i])
+#     #tabs <- lapply(1:NGears(), )
+#
+#     do.call(tabsetPanel, tabs)
+#   }
+# })
+#
+#
+# output$dynamic_tabs <- renderUI({
+#   gear_tabs()
+# })
+#
+# observeEvent(input$num_tabs, {
+#   updateCheckboxGroupInput(session, "Select",
+#                            choices = as.character(1:NoofSelComp()),
+#                            selected = get_sel_indices(blicc_ld(), input$num_tabs),
+#                            inline = TRUE)
+#
+# })
+

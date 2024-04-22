@@ -9,10 +9,13 @@ select_types <- c("Logistic", "Normal",
                   "Single-side Normal", "Double-sided Normal")
 
 
-#' Calculates the mortality from selectivities not being edited
+#' Calculates the mortality from all selectivities not being edited (i.e. excludes ed_seln)
+#'
+#' @param blicc_ld the data list being edited
+#' @param ed_seln  the index for the selectivity function being edited
+#' @param ed_gear  the index for the gear being edited
 #'
 mortality <- function(blicc_ld, ed_seln, ed_gear) {
-
   Sm <- exp(blicc_ld$polSm)
 
   Ski <- list()
@@ -24,52 +27,50 @@ mortality <- function(blicc_ld, ed_seln, ed_gear) {
       Indx <- with(blicc_ld, sp_i[si] : sp_e[si])
       Ski[[si]] <- with(blicc_ld,
                         switch(fSel[si],
-                               Rsel_logistic(Sm[Indx], LMP),
-                               Rsel_normal(Sm[Indx], LMP),
-                               Rsel_ssnormal(Sm[Indx], LMP),
-                               Rsel_dsnormal(Sm[Indx], LMP)))
+                               fishblicc::Rsel_logistic(Sm[Indx], LMP),
+                               fishblicc::Rsel_normal(Sm[Indx], LMP),
+                               fishblicc::Rsel_ssnormal(Sm[Indx], LMP),
+                               fishblicc::Rsel_dsnormal(Sm[Indx], LMP)))
     }
   }
 
   gear <- integer(0)
   wt <- double(0)
-  Fk <- double(0)
+  gFk <- double(0)
   for (gi in 1:blicc_ld$NG) {
     if (blicc_ld$GSbase[gi]==ed_seln) {
       gear <- c(gear, gi)
       wt <- c(wt, 1)
-      if (blicc_ld$Fkg[gi] > 0) Fk <- with(blicc_ld, c(Fk, exp(polFkm[Fkg[gi]]))) else Fk <- c(Fk, 0)
+      if (blicc_ld$Fkg[gi] > 0) gFk <- with(blicc_ld, c(gFk, exp(polFkm[Fkg[gi]]))) else gFk <- c(gFk, 0)
       GSki[[gi]] <- double(blicc_ld$NB)
     } else
       GSki[[gi]] <- Ski[[blicc_ld$GSbase[gi]]]
+
     gii <- 1L + (gi-1L)*2L
     if (blicc_ld$GSmix1[gii] > 0) {
       for (si in blicc_ld$GSmix1[gii]:blicc_ld$GSmix1[gii+1L])
-        if (GSmix2[si] == ed_seln) {
+        if (blicc_ld$GSmix2[si] == ed_seln) {
           gear <- c(gear, gi)
-          wt <- c(wt, Sm[NP+si])
-          if (blicc_ld$Fkg[gi] > 0) Fk <- with(blicc_ld, c(Fk, exp(polFkm[Fkg[gi]]))) else Fk <- c(Fk, 0)
+          wt <- c(wt, Sm[blicc_ld$NP+si])
+          if (blicc_ld$Fkg[gi] > 0) gFk <- with(blicc_ld, c(gFk, exp(polFkm[Fkg[gi]]))) else gFk <- c(gFk, 0)
         } else
           GSki[[gi]] <- with(blicc_ld, GSki[[gi]] + Ski[[GSmix2[si]]] * Sm[NP+si])
     }
   }
-
-
   Zk <- with(blicc_ld, exp(polMkm)*M_L)
   for (gi in 1:length(GSki)) {
     if (blicc_ld$Fkg[gi] > 0)
       Zk <- with(blicc_ld, Zk + exp(polFkm[Fkg[gi]]) * GSki[[gi]])
   }
-
   return(list(ed_seln = ed_seln, ed_indx = which(ed_gear==gear),
               par_indx = with(blicc_ld, sp_i[ed_seln] : sp_e[ed_seln]),
               Zk = Zk, gear=gear,
-              weight=wt, Fk=Fk,
+              weight=wt, Fk=gFk,
               fSel = blicc_ld$fSel[ed_seln], LMP=blicc_ld$LMP,
               GSki = GSki[[ed_gear]]))
 }
 
-expect_freq <- function(blicc_ld, mort, spar, N) {
+expect_freq <- function(blicc_ld, mort, spar, wt, N) {
   Zki <- mort$Zk
   sel <- with(mort,
               switch(fSel,
@@ -77,16 +78,17 @@ expect_freq <- function(blicc_ld, mort, spar, N) {
                      Rsel_normal(spar, LMP),
                      Rsel_ssnormal(spar, LMP),
                      Rsel_dsnormal(spar, LMP)))
-  # Update Zki
+  # Update Zki with this selectivity component
+
   with(mort, {
+    weight[ed_indx] <- wt
     for (i in seq(weight))
-      if (Fk[i]>0) Zki <- Zki + Fk[i] * weight[i] * sel
+      if (Fk[i] > 0) Zki <- Zki + Fk[i] * weight[i] * sel
   })
 
-  pop <- with(blicc_ld, Rpop_len(gl_nodes, gl_weights, LLB, Zki,
-                                 exp(polGam), exp(polGam)/poLinfm))
+  pop <- with(blicc_ld, fishblicc::Rpop_len(gl_nodes, gl_weights, LLB, Zki,
+                                   exp(polGam), exp(polGam)/poLinfm))
   sel <- with(mort, weight[ed_indx]*sel*pop)
-
   gear_sel <- with(mort, (GSki*pop + sel))
   Adjust <- N / sum(gear_sel)
   gear_sel <- gear_sel*Adjust
@@ -95,6 +97,42 @@ expect_freq <- function(blicc_ld, mort, spar, N) {
                     Freq = c(gear_sel, sel),
                     Selectivity = rep(c("Gear", "Component"), each=length(sel))))
 }
+
+#' Get the selectivity parameters for selectivity function sel_i
+#'
+get_sel_par <- function(ld, sel_i) {
+  return(with(ld, polSm[sp_i[sel_i]:sp_e[sel_i]]))
+}
+
+
+#get_sel_wt(blicc_ld(), Cur_Gear(), Cur_Sel())
+
+#' Get the selectivity weights for gear and selectivity function sel_i
+#'
+get_sel_wt <- function(ld, gear_i, sel_i) {
+
+  if (ld$GSbase[gear_i]==sel_i)
+    return(-1)  # base component
+
+  res <- NA
+  si <- 2L*gear_i-1L
+  if (ld$GSmix1[si] > 0) {
+    selfun <- with(ld, GSmix2[GSmix1[si]:GSmix1[si+1L]])
+    res <- with(ld, polSm[NP+match(sel_i, selfun)])
+  }
+  return(res)
+}
+
+
+get_sel_fun <- function(ld, gear_i) {
+  sf <- ld$GSbase[gear_i]
+  si <- (gear_i-1L)*2L+1L
+  if (ld$GSmix1[si] > 0) {
+    sf <- with(ld, c(sf, GSmix2[GSmix1[si]:GSmix1[si+1L]]))
+  }
+  return(sf)
+  }
+
 
 
 get_sel_indices <- function(ld, gear_name) {

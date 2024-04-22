@@ -1,17 +1,16 @@
 
 #
-#1) plot length data as bar/histogram done
-#2) collect 2 parameters from clicking plot done
-#3) plot a normal selectivity curve over the data using the 2 parameter. done
+#1) Add plot panel for plot_prior function for all gears with plot button
+#2) Separate current selectivity parameters and weight
+#3) Add edits to blicc_ld() data reactive on Gear_N or Sel_N change, or save option
+#4) Add save option to data object
 
 library("here")
 library("shiny")
 library("ggplot2")
 library("stats")
-#library("dplyr")
 library("shinyjs")
 library("shinyalert")
-#library("DT")
 library("shinythemes")
 library("shinyWidgets")
 library("jsonlite")
@@ -84,14 +83,10 @@ server <- function(input, output, session) {
   shinyjs::enable()
 
 # Declarations ------------------------------------------------------------
+  # These can be loaded but not edited (except blicc_ld data set)
   blicc_ld <- reactiveVal(NULL)  # blicc data list
   gear_names <- reactiveVal(NULL)
-  # seln <- reactiveVal(NULL)
   NGears <- reactiveVal(0)
-  fsel <- reactiveVal(0)         # Selectivity component functions
-  sel_par <- reactiveValues()    # Selectivity parameters by selectivity component
-  sel_fun <- reactiveValues()    # Selectivity components by gear
-  sel_wts <- reactiveValues()    # Selectivity component weights by gear
 
 # Data Loading ------------------------------------------------------------
 
@@ -123,29 +118,12 @@ server <- function(input, output, session) {
       NGears(0)
       gear_names(NULL)
       updateNumericInput(session, "NoofSel", value = 0)
-      fsel(0)
     } else {
       # Need to check data list is correct format blicc_ld
       if ("gname" %in% names(file_data())) {
         blicc_ld(file_data())
         NGears(file_data()$NG)
         gear_names(file_data()$gname)
-        fsel(file_data()$fSel)
-        for (si in 1:file_data()$NS)
-          sel_par[[as.character(si)]] <- with(file_data(), exp(polSm[sp_i[si]:sp_e[si]]))
-        for (gi in 1:file_data()$NG) {
-          sf <- file_data()$GSbase[gi]
-          sw <- 1
-          si <- (gi-1L)*2L+1L
-          if (file_data()$GSmix1[si] > 0) {
-            sf <- with(file_data(), c(sf, GSmix2[GSmix1[si]:GSmix1[si+1L]]))
-            sw <- with(file_data(), c(sw, exp(polSm[NP+GSmix1[si]:GSmix1[si+1L]])))
-            }
-          # names(sf) <- as.character(sf)
-          # names(sw) <- as.character(sf)
-          sel_fun[[gear_names()[gi]]] <- sf
-          sel_wts[[gear_names()[gi]]] <- sw
-        }
         updateNumericInput(session, "NoofSel", value = file_data()$NS)
         updateRadioButtons(session, "Gear_N", label = "Current Gear:",
           choices = file_data()$gname,
@@ -157,29 +135,37 @@ server <- function(input, output, session) {
   })
 
 
-
-  # Update Gear -----------------------------------------------------------
-
-  Cur_Gear <- reactive({
-    return(match(input$Gear_N, gear_names()))
-  })
-
+  # Update Gear & Selectivity ------------------------------------------------
+  # Includes updating blicc_ld() with new values
   # Change current gear
   observe({
-    req(input$Gear_N, blicc_ld())
-    sel_comp <- sel_fun[[input$Gear_N]] #get_sel_indices(blicc_ld(), input$Gear_N)
+    req(Cur_Gear(), blicc_ld())
     updateCheckboxGroupInput(session, "Select",
                              choices = as.character(1:NoofSelComp()),
-                             selected = sel_comp,
+                             selected = Cur_SelComp(),
                              inline = TRUE)
     updateRadioButtons(session, "Sel_N",
-                       choices = as.character(sel_comp),
-                       selected = sel_comp[1],
+                       choices = as.character(Cur_SelComp()),
+                       selected = Cur_SelComp()[1],
                        inline = TRUE)
     }) |>
   bindEvent(input$Gear_N)
 
-  ## Selectivity components ----
+  # Change current selectivity component
+  observe({
+    req(Cur_Sel(), blicc_ld())
+    updateSelectInput(session, "fun_type",
+                selected = select_types[blicc_ld()$fSel[Cur_Sel()]])
+  }) |>
+  bindEvent(input$Sel_N)
+
+
+  # Reactives for gear and selectivity components --------------------------
+
+  # gear index
+  Cur_Gear <- reactive({
+    return(match(input$Gear_N, gear_names()))
+  })
 
   NoofSelComp <- reactive({
     return(input$NoofSel)
@@ -191,140 +177,143 @@ server <- function(input, output, session) {
     return(as.integer(input$Sel_N))
   })
 
-  # The component selectivity index in the current gear
   Cur_SelComp <- reactive({
-    req(input$Gear_N, input$Sel_N)
-    sc <- which(sel_fun[[input$Gear_N]]==as.integer(input$Sel_N))
-    if (length(sc)==0) sc <- 1  # for when input$Gear_N, input$Sel_N are not synchronised
-    return(sc) #find gear selectivity component
+    req(blicc_ld(), Cur_Gear())
+    return(get_sel_fun(blicc_ld(), Cur_Gear())) #get_sel_indices(blicc_ld(), input$Gear_N)
   })
 
-  observe({
-    req(Cur_Sel())
-    updateSelectInput(session,
-                      "fun_type",
-                      label = "Selected Type",
-                      choices = as.list(select_types),
-                      selected = select_types[fsel()[Cur_Sel()]])
-    updateSliderInput(session,
-          inputId = "peak_slider",
-          value = sel_par[[as.character(Cur_Sel())]][1]
-    )
-    updateSliderInput(session,
-          inputId = "slope_slider1",
-          value = 1/sel_par[[as.character(Cur_Sel())]][2]
-    )
-    if (fsel()[Cur_Sel()]==4) {
-      updateSliderInput(session,
-          inputId = "slope_slider2",
-          value = 1/sel_par[[as.character(Cur_Sel())]][3]
-        )
-    }
-    if (Cur_SelComp() > 1)
-      updateSliderInput(session,
-                        inputId = "weight",
-                        value = sel_wts[[input$Gear_N]][Cur_SelComp()])
-  }) |>
-  bindEvent(input$Sel_N)
+  # The component selectivity index in the current gear
+  Cur_SelCompIndex <- reactive({
+    req(Cur_SelComp(), input$Gear_N, input$Sel_N)
+    sc <- which(Cur_SelComp()==as.integer(input$Sel_N))
+    if (length(sc)==0) sc <- 1  # for when input$Gear_N, input$Sel_N are not synchronised
+    return(sc) #find gear selectivity component for current gear
+  })
 
+  # vector of selectivity parameters
+  Cur_SelPar <- reactive({
+    req(blicc_ld(), Cur_Sel())
+    return(get_sel_par(blicc_ld(), Cur_Sel()))
+  })
 
-  observe({
-      output$plot1 <- renderPlot({
-        req(observe_df(), expect_df())
+  # Current weight parameters
+  Cur_SelWt <- reactive({
+    req(blicc_ld(), Cur_Gear(), Cur_Sel())
+    return(get_sel_wt(blicc_ld(), Cur_Gear(), Cur_Sel()))
+  })
 
-        ggplot(observe_df(), aes(x = len, y = fq)) +
-          geom_bar(stat = "identity",
-                   fill = "#0f2667",
-                   alpha = 0.7) +
-          geom_line(data = expect_df(), aes(x = LMP, y = Freq, color = Selectivity)) +
-          labs(x = "Length", y = "Frequency") +
-          theme_minimal() +
-          theme(
-            panel.grid.major.y = element_blank(),
-            panel.grid.minor.y = element_blank(),
-            panel.grid.major.x = element_blank(),
-            panel.grid.minor.x = element_blank(),
-            axis.line = element_line(color = "black"),
-            axis.text = element_text(color = "black", size = 15),
-            # Adjust size as needed
-            axis.ticks = element_line(color = "black", linewidth = 1),
-            axis.title = element_text(color = "black", size = 15)
-          )
-      })
+  Cur_SelFun <- reactive({
+    req(input$fun_type)
+    return(match(input$fun_type, select_types))
+  })
 
-      })
-
-# select_param ------------------------------------------------------------
+# Select Parameters---------------------------------------------------------
 
   # This needs to change every time the selectivity function changes
   output$select_param <- renderUI({
-    req(blicc_ld(), Cur_Sel(), input$Gear_N, Cur_SelComp())
+    req(blicc_ld(), Cur_Sel(), input$Gear_N, Cur_SelCompIndex())
     min_length <- blicc_ld()$LMP[1]
     mid_length <- blicc_ld()$LMP[blicc_ld()$NB %/% 2]
     max_length <- blicc_ld()$LMP[blicc_ld()$NB]
+    sel_par <- exp(Cur_SelPar())
+
     sliders <- list(
       sliderInput(
         "peak_slider",
         "Location",
         min = min_length,
         max = max_length,
-        value = mid_length
+        value = sel_par[1]
       ),
       sliderInput(
         "slope_slider1",
         "Left Slope:",
         min = 0,
-        max = max_length / 4,
-        value = max_length / 10
+        max = max_length,
+        value = 1/sel_par[2]
       )
     )
 
     sl <- 3
-    if (fsel()[Cur_Sel()]==4) {
+    if (blicc_ld()$fSel[Cur_Sel()]==4) {
       sliders[[3]] <-
         sliderInput(
           "slope_slider2",
           "Right Slope:",
           min = 0,
-          max = max_length / 4,
-          value = max_length / 10
+          max = max_length,
+          value = 1/sel_par[3]
         )
       sl <- 4
     }
-    if (Cur_SelComp() > 1)
-      sliders[[sl]] <- sliderInput("weight", "Mix Weight",
-                  min = 0, max = 1, value = sel_wts[[input$Gear_N]][Cur_SelComp()])
+    if (Cur_SelCompIndex() > 1)
+      sliders[[sl]] <- sliderInput("weight_slider", "Mix Weight",
+                  min = 0, max = 1, value = exp(Cur_SelWt()))
     return(sliders)
   })
-<<<<<<< HEAD
 
 
-=======
-#
-#
->>>>>>> 54b599bed965583d6dad7fd1daf352078dad8469
 #
 # # plotting functions ---------------------------------------------------------------
 #
-#   # Define the reactive for frequency data
+
+
+  observe({
+    output$plot1 <- renderPlot({
+      req(observe_df(), expect_df())
+
+      ggplot(observe_df(), aes(x = len, y = fq)) +
+        geom_bar(stat = "identity",
+                 fill = "#0f2667",
+                 alpha = 0.7) +
+        geom_line(data = expect_df(), aes(x = LMP, y = Freq, color = Selectivity)) +
+        labs(x = "Length", y = "Frequency") +
+        theme_minimal() +
+        theme(
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          axis.line = element_line(color = "black"),
+          axis.text = element_text(color = "black", size = 15),
+          # Adjust size as needed
+          axis.ticks = element_line(color = "black", linewidth = 1),
+          axis.title = element_text(color = "black", size = 15)
+        )
+    })
+
+  })
+
+
+
+  # Define the reactive for frequency data
   observe_df <- reactive({
     req(blicc_ld(), input$Gear_N)
-    data.frame(len = blicc_ld()$LMP, fq = blicc_ld()$fq[[input$Gear_N]])
+    return(data.frame(len = blicc_ld()$LMP, fq = blicc_ld()$fq[[input$Gear_N]]))
   })
 
   # Define the reactive for the mortality
   mort_ls <- reactive({
     req(blicc_ld(), Cur_Sel(), Cur_Gear())
-    mortality(blicc_ld(), Cur_Sel(), Cur_Gear())
+    return(mortality(blicc_ld(), Cur_Sel(), Cur_Gear()))
   })
 
 
   # Define the reactive for expected frequency
   expect_df <- reactive({
-    req(blicc_ld(), input$Gear_N, input$peak_slider, input$slope_slider1)
-    NSample <- sum(blicc_ld()$fq[[input$Gear_N]])
-    spar <- c(input$peak_slider, 1/input$slope_slider1)
-    expect_freq(blicc_ld(), mort_ls(), spar, NSample)
+    req(blicc_ld(), Cur_Gear(), Cur_SelFun(), Cur_SelCompIndex(),
+        input$peak_slider, input$slope_slider1)
+    NSample <- sum(blicc_ld()$fq[[Cur_Gear()]])
+    if (Cur_SelFun()==4)
+      spar <- c(input$peak_slider, 1/input$slope_slider1, 1/input$slope_slider2)
+    else
+      spar <- c(input$peak_slider, 1/input$slope_slider1)
+    if (Cur_SelCompIndex() > 1)
+      wt <- input$weight_slider
+    else
+      wt <- 1
+    return(expect_freq(blicc_ld(), mort_ls(), spar,
+                       wt, NSample))
   })
 
 

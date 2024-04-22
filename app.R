@@ -1,9 +1,4 @@
 
-#
-#1) plot length data as bar/histogram done
-#2) collect 2 parameters from clicking plot done
-#3) plot a normal selectivity curve over the data using the 2 parameter. done
-
 library("here")
 library("shiny")
 library("ggplot2")
@@ -296,13 +291,13 @@ server <- function(input, output, session) {
                   min = 0, max = 1, value = sel_wts[[input$Gear_N]][Cur_SelComp()])
     return(sliders)
   })
-<<<<<<< HEAD
+#<<<<<<< HEAD
 
 
-=======
+#=======
 #
 #
->>>>>>> 54b599bed965583d6dad7fd1daf352078dad8469
+#>>>>>>> 54b599bed965583d6dad7fd1daf352078dad8469
 #
 # # plotting functions ---------------------------------------------------------------
 #

@@ -79,12 +79,9 @@ expect_freq <- function(blicc_ld, mort, spar, wt, N) {
                      Rsel_ssnormal(spar, LMP),
                      Rsel_dsnormal(spar, LMP)))
   # Update Zki with this selectivity component
-
-  with(mort, {
-    weight[ed_indx] <- wt
-    for (i in seq(weight))
-      if (Fk[i] > 0) Zki <- Zki + Fk[i] * weight[i] * sel
-  })
+  mort$weight[mort$ed_indx] <- wt
+  for (i in seq(mort$weight))
+    if (mort$Fk[i] > 0) Zki <- Zki + mort$Fk[i] * mort$weight[i] * sel
 
   pop <- with(blicc_ld, fishblicc::Rpop_len(gl_nodes, gl_weights, LLB, Zki,
                                    exp(polGam), exp(polGam)/poLinfm))
@@ -101,6 +98,7 @@ expect_freq <- function(blicc_ld, mort, spar, wt, N) {
 #' Get the selectivity parameters for selectivity function sel_i
 #'
 get_sel_par <- function(ld, sel_i) {
+  if (sel_i==0) return(0)
   return(with(ld, polSm[sp_i[sel_i]:sp_e[sel_i]]))
 }
 
@@ -111,8 +109,8 @@ get_sel_par <- function(ld, sel_i) {
 #'
 get_sel_wt <- function(ld, gear_i, sel_i) {
 
-  if (ld$GSbase[gear_i]==sel_i)
-    return(-1)  # base component
+  if (gear_i==0 | sel_i==0) return(-1)
+  if (ld$GSbase[gear_i]==sel_i) return(1)  # base component
 
   res <- NA
   si <- 2L*gear_i-1L
@@ -121,6 +119,31 @@ get_sel_wt <- function(ld, gear_i, sel_i) {
     res <- with(ld, polSm[NP+match(sel_i, selfun)])
   }
   return(res)
+}
+
+set_sel_wt <- function(ld, gear_i, sel_i, new_wt) {
+  si <- 2L*gear_i-1L
+  if (ld$GSmix1[si] > 0) {
+    selfun <- with(ld, GSmix2[GSmix1[si]:GSmix1[si+1L]])
+    ld$polSm[ld$NP+match(sel_i, selfun)] <- log(new_wt)
+  }
+  return(ld)
+}
+
+#' Identifies weights associated with gear/selectivity function
+hash_wt <- function(ld) {
+  wt <- double(0)
+  hash <- pi <- integer(0)
+  for (gi in 1:ld$NG) {
+    si <- gi*2L-1L
+    if (ld$GSmix1[si] > 0) {
+      pii <- ld$GSmix1[si]:ld$GSmix1[si+1L]
+      hash <- c(hash, gi*1000L + ld$GSmix2[pii])
+      pi <- c(pi, pii)
+      wt <- c(wt, ld$polSm[ld$NP+pii])
+    }
+  }
+  return(list(hash, pi, wt))
 }
 
 
@@ -135,12 +158,13 @@ get_sel_fun <- function(ld, gear_i) {
 
 
 
-get_sel_indices <- function(ld, gear_name) {
-  gi <- match(gear_name, ld$gname)
+get_sel_indices <- function(ld, gi) {
+  if (is.null(ld)) return(0)
   si <- 2L*gi-1L
   if (ld$GSmix1[si] > 0)
     return(with(ld, c(GSbase[gi], GSmix2[GSmix1[si]:GSmix1[si+1L]])))
-  else return(ld$GSbase[gi])
+  else
+    return(ld$GSbase[gi])
 }
 
 

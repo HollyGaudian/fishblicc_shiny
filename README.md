@@ -6,7 +6,6 @@ This is a work in progress. The software is being developed to provide an intera
 To Do
 
 Read csv and create a blicc data object with default settings
-Allow edits of priors for M/K, Linf, F/K, Galpha, and NBphi
 Allow "informative" option reducing sd for lognormal for above priors
 Allow log slope option for selectivity prior
 Allow "informative" option for selectivity parameters
